@@ -41,8 +41,8 @@ def split_dataset(input_parquet: Input[Artifact], dataset_path: Output[Artifact]
         test_size=1 - train_ratio,
         random_state=random_state)
 
-    n_users = ratings_df.user_id.max()
-    n_items = ratings_df.item_id.max()
+    n_users = ratings_df.userId.max()
+    n_items = ratings_df.movieId.max()
 
     # test is now 10% of the initial data set
     # validation is now 15% of the initial data set
@@ -76,7 +76,11 @@ def put_to_minio(inputFile: Input[Artifact], upload_file_name:str='', bucket: st
         minio_client.create_bucket(Bucket=bucket)
     except minio_client.exceptions.BucketAlreadyExists:
         # Bucket already created.
-        pass
+        print(f"{bucket} already exists, not creating it.")
+    except minio_client.exceptions.BucketAlreadyOwnedByYou:
+        print(f"{bucket} already exists, not creating it.")
+    
+        
     if os.path.isdir(inputFile.path):
         for file in os.listdir(inputFile.path):
             s3_path = os.path.join('ml-25m', file)
