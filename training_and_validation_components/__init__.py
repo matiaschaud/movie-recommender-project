@@ -1,4 +1,8 @@
 from .data_preprocessing import negative_sampling, get_dataset_metadata, get_test_valid_dataset
+from .data_preprocessing_cuda import negative_sampling_cuda, get_dataset_metadata_cuda, get_test_valid_dataset_cuda
 from .model_registration import promote_model_to_staging
+from .model_registration_cuda import promote_model_to_staging_cuda
 from .model_validation import validate_model
+from .model_validation_cuda import validate_model_cuda
 from .model_training import train_model
+from .model_training_cuda import train_model_cuda

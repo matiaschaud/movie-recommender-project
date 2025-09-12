@@ -2,9 +2,8 @@ from typing import Dict
 from kfp.dsl import component, Input, Dataset
 
 
-@component(packages_to_install=["torch", "torchvision", "torchaudio", "mlflow", "torchinfo" ,"pandas", "boto3"],
-           pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple", "https://pypi.python.org/simple"])
-def train_model(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: dict, mlflow_uri: str,
+@component(base_image="matichaud/movie-recommender:v1")
+def train_model_cuda(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: dict, mlflow_uri: str,
                 hot_reload_model_run_id: str, training_data: Input[Dataset], training_data_metadata: Dict[str, int],
                 testing_data: Input[Dataset],
                 model_embedding_factors: int, model_learning_rate: float, model_hidden_dims: int, model_dropout_rate: float,
@@ -24,6 +23,9 @@ def train_model(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: di
     from mlflow.models import infer_signature
     from torch.utils.data import Dataset
     import pandas as pd
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
 
     class datasetReader(Dataset):
         def __init__(self, df, dataset_name):
@@ -81,6 +83,9 @@ def train_model(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: di
     else:
         model = MatrixFactorization(n_users, n_items, n_factors=model_embedding_factors, hidden_dim=model_hidden_dims, dropout_rate=model_dropout_rate)
 
+    # --- Move the model to the GPU ---
+    model.to(device)
+    
     optimizer = torch.optim.SGD(model.parameters(), lr=model_learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=optimizer_step_size, gamma=optimizer_gamma)
     loss_func = torch.nn.L1Loss()
@@ -119,15 +124,19 @@ def train_model(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: di
         mlflow.log_artifact("model_summary.txt")
 
         model_signature = None
-
+        
         for train_iter in range(training_epochs):
             print(train_iter)
             model.train()
             t_loss = 0
             t_count = 0
             for row, col, rating in train_dataloader:
+                # --- Move data to the GPU before processing ---
+                row, col, rating = row.to(device), col.to(device), rating.to(device)
+                
                 # Predict and calculate loss
                 prediction = model(row, col)
+
                 if model_signature is None:
                     model_signature = infer_signature(
                         {
@@ -155,6 +164,8 @@ def train_model(mlflow_experiment_name: str, mlflow_run_id: str, mlflow_tags: di
             print('Evaluating')
             with torch.no_grad():
                 for row, col, rating in test_dataloader:
+                    # --- Move data to the GPU before processing ---
+                    row, col, rating = row.to(device), col.to(device), rating.to(device)
                     prediction = model(row, col)
                     loss = loss_func(prediction, rating.unsqueeze(1))
                     te_loss += loss

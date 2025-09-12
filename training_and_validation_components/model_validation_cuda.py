@@ -1,9 +1,8 @@
 from kfp.dsl import component, Input, Dataset
 
 
-@component(packages_to_install=["scikit-metrics", "torch", "torchvision", "torchaudio", "mlflow", "pandas"],
-           pip_index_urls=["https://download.pytorch.org/whl/cpu", "https://pypi.org/simple", "https://pypi.python.org/simple"])
-def validate_model(
+@component(base_image="matichaud/movie-recommender:v1")
+def validate_model_cuda(
         model_run_id: str,
         top_k: int,
         threshold: int,
@@ -31,7 +30,11 @@ def validate_model(
     
     mlflow.set_tracking_uri(uri=mlflow_uri)
 
-    model_uri = f"runs:/{model_run_id}/model/data"
+    # --- 1. Define the device and move the model to it ---
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    
+    model_uri = f"runs:/{model_run_id}/model"
     recommendation_model = mlflow.pytorch.load_model(model_uri)
     class datasetReader(Dataset):
         def __init__(self, df, dataset_name):
@@ -72,6 +75,9 @@ def validate_model(
 
     with torch.no_grad():
         for users, movies, ratings in val_dataloader:
+            # --- 2. Move data tensors to the GPU ---
+            users, movies, ratings = users.to(device), movies.to(device), ratings.to(device)
+
             output = recommendation_model(users, movies)
 
             y_pred.append(output.sum().item() / len(users))

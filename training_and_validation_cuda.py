@@ -1,13 +1,13 @@
 from kfp import dsl
 import kfp
 
-from data_components import qa_data
+from data_components import qa_data_cuda
 from training_and_validation_components import (
-    negative_sampling, get_dataset_metadata,
-    get_test_valid_dataset,
-    promote_model_to_staging,
-    validate_model,
-    train_model
+    negative_sampling_cuda, get_dataset_metadata_cuda,
+    get_test_valid_dataset_cuda,
+    promote_model_to_staging_cuda,
+    validate_model_cuda,
+    train_model_cuda
 )
 
 
@@ -15,7 +15,7 @@ from training_and_validation_components import (
   name='Model training pipeline',
   description='A pipeline to train recommenders on the movielens dataset'
 )
-def training_pipeline(
+def training_pipeline_cuda(
         minio_bucket: str = 'datasets',
         number_of_negative_samples: int = 10,
         training_dataset_name: str = 'ml-25m',
@@ -39,25 +39,28 @@ def training_pipeline(
         model_promote_recall_threshold: float = -0.2,
         mlflow_experiment_name: str = 'recommender',
         mlflow_registered_model_name: str = 'recommender_production',
-        mlflow_uri: str = 'http://192.168.1.90:8080'):
+        mlflow_uri: str = 'http://mlflow-service.mlflow.svc.cluster.local:5000',
+        AWS_ACCESS_KEY_ID: str = "minio",
+        AWS_SECRET_ACCESS_KEY: str = "minio123",
+        MLFLOW_S3_ENDPOINT_URL: str = "http://minio-service.kubeflow.svc.cluster.local:9000"):
 
-    qa_op = qa_data(bucket=minio_bucket).set_display_name("qa-training-data")
+    qa_op = qa_data_cuda(bucket=minio_bucket).set_display_name("qa-training-data")
 
-    dataset_metadata = get_dataset_metadata(
+    dataset_metadata = get_dataset_metadata_cuda(
                     bucket=minio_bucket,
                     dataset_name=training_dataset_name).after(qa_op)
 
-    negative_sampled_data = negative_sampling(
+    negative_sampled_data = negative_sampling_cuda(
                     bucket=minio_bucket,
                     dataset_name=training_dataset_name,
                     split='train', 
-                    num_ng_test=number_of_negative_samples).after(dataset_metadata).set_caching_options(False)
+                    num_ng_test=number_of_negative_samples).after(dataset_metadata).set_caching_options(True)
 
-    aux_data = get_test_valid_dataset(
+    aux_data = get_test_valid_dataset_cuda(
                 bucket=minio_bucket,
-                dataset_name=training_dataset_name).after(negative_sampled_data).set_caching_options(False)
+                dataset_name=training_dataset_name).after(negative_sampled_data).set_caching_options(True)
 
-    training = train_model(
+    training = train_model_cuda(
         mlflow_experiment_name=mlflow_experiment_name,
         mlflow_run_id="",
         mlflow_tags={},
@@ -76,27 +79,38 @@ def training_pipeline(
         testing_data=aux_data.outputs['testing_dataset'],
         shuffle_training_data=shuffle_training_data,
         shuffle_testing_data=shuffle_testing_data,
-        mlflow_uri=mlflow_uri).after(negative_sampled_data).set_caching_options(False)
+        mlflow_uri=mlflow_uri,
+        AWS_ACCESS_KEY_ID=AWS_ACCESS_KEY_ID, 
+        AWS_SECRET_ACCESS_KEY=AWS_SECRET_ACCESS_KEY, 
+        MLFLOW_S3_ENDPOINT_URL=MLFLOW_S3_ENDPOINT_URL).after(negative_sampled_data).set_caching_options(True)
+        
+    training.set_gpu_limit(1)
 
-    val = validate_model(
+    val = validate_model_cuda(
         model_run_id=training.output,
         top_k=validation_top_k,
         threshold=validation_threshold,
         val_batch_size=validation_batch_size,
         validation_dataset=aux_data.outputs['validation_dataset'],
-        mlflow_uri=mlflow_uri).after(training).set_caching_options(False)
+        AWS_ACCESS_KEY_ID=AWS_ACCESS_KEY_ID, 
+        AWS_SECRET_ACCESS_KEY=AWS_SECRET_ACCESS_KEY, 
+        MLFLOW_S3_ENDPOINT_URL=MLFLOW_S3_ENDPOINT_URL,
+        mlflow_uri=mlflow_uri).after(training).set_caching_options(True)
 
-    promote_model_to_staging(
+    promote_model_to_staging_cuda(
         model_run_id=training.output,
         registered_model_name=mlflow_registered_model_name,
         top_k=validation_top_k,
         rms_threshold=model_promote_rms_threshold,
         precision_threshold=model_promote_precision_threshold,
         recall_threshold=model_promote_recall_threshold,
+        AWS_ACCESS_KEY_ID=AWS_ACCESS_KEY_ID, 
+        AWS_SECRET_ACCESS_KEY=AWS_SECRET_ACCESS_KEY, 
+        MLFLOW_S3_ENDPOINT_URL=MLFLOW_S3_ENDPOINT_URL,
         mlflow_uri=mlflow_uri).after(val).set_caching_options(False)
 
 
 if __name__ == "__main__":
     kfp.compiler.Compiler().compile(
         pipeline_func=training_pipeline,
-        package_path='compiled_pipelines/training_pipeline.yaml')
+        package_path='compiled_pipelines/training_pipeline_cuda.yaml')
