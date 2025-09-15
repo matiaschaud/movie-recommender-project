@@ -56,8 +56,8 @@ def dataprep_pipeline(
     movies_parquet_op.after(load_to_postgres_task)
 
     # Set caching options to False for all new tasks
-    download_dataset.set_caching_options(False)
-    unzip_folder.set_caching_options(False)
+    download_dataset.set_caching_options(True)
+    unzip_folder.set_caching_options(True)
     load_to_postgres_task.set_caching_options(False) # New task
     ratings_parquet_op.set_caching_options(False)
     movies_parquet_op.set_caching_options(False)

@@ -110,7 +110,7 @@ def qa_data(bucket: str = 'datasets', dataset: str = 'ml-25m'):
     print('QA passed!')
 
 
-@dsl.component(base_image="python:3.11", packages_to_install=["pandas", "psycopg2-binary"])
+@dsl.component(base_image="python:3.11", packages_to_install=["psycopg2-binary"])
 def load_to_postgres(
     ratings_input_path: Input[Artifact],
     movies_input_path: Input[Artifact],
@@ -120,14 +120,11 @@ def load_to_postgres(
     db_password: str,
     db_port: int = 5432,
 ):
-    import pandas as pd
     import psycopg2
-    import io
+    from datetime import datetime, timezone
 
-    # Load data into pandas DataFrames
-    ratings_df = pd.read_csv(ratings_input_path.path)
-    movies_df = pd.read_csv(movies_input_path.path)
-
+    conn = None
+    cur = None
     try:
         conn = psycopg2.connect(
             host=db_host,
@@ -138,52 +135,52 @@ def load_to_postgres(
         )
         cur = conn.cursor()
 
-        # Create ratings table if it doesn't exist
+        # Create tables with primary keys, foreign keys, and indexes
+        print("Creating 'movies' table...")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS movies (
+                movieId INTEGER PRIMARY KEY,
+                title VARCHAR(255),
+                genres VARCHAR(255),
+                created_at timestamp DEFAULT current_timestamp
+            );
+        """)
+
         print("Creating 'ratings' table...")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ratings (
                 userId INTEGER,
                 movieId INTEGER,
                 rating NUMERIC(3, 1),
-                "timestamp" BIGINT
+                "timestamp" BIGINT,
+                PRIMARY KEY (userId, movieId),
+                CONSTRAINT fk_movie
+                    FOREIGN KEY(movieId) 
+                    REFERENCES movies(movieId)
             );
         """)
 
-        # Create movies table if it doesn't exist
-        print("Creating 'movies' table...")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS movies (
-                movieId INTEGER,
-                title VARCHAR(255),
-                genres VARCHAR(255)
-            );
-        """)
+        print("Creating index on 'ratings.userId'...")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ratings_userId ON ratings (userId);")
 
-        # Truncate tables to ensure a clean slate before loading
         print("Truncating tables to prevent duplicates...")
-        cur.execute("TRUNCATE TABLE ratings;")
-        cur.execute("TRUNCATE TABLE movies;")
+        cur.execute("TRUNCATE TABLE movies CASCADE;")
 
-        # Use an in-memory buffer to load ratings data
-        print("Loading ratings data...")
-        ratings_buffer = io.StringIO()
-        ratings_df.to_csv(ratings_buffer, index=False, header=False)
-        ratings_buffer.seek(0)
-        cur.copy_from(ratings_buffer, 'ratings', sep=',')
-
-        # Use an in-memory buffer to load movies data
         print("Loading movies data...")
-        movies_buffer = io.StringIO()
-        movies_df.to_csv(movies_buffer, index=False, header=False)
-        movies_buffer.seek(0)
-        cur.copy_from(movies_buffer, 'movies', sep=',')
+        with open(movies_input_path.path, 'r') as f_movies:
+            cur.copy_expert("COPY movies(movieId, title, genres) FROM STDIN WITH (FORMAT CSV, HEADER)", f_movies)
+
+        print("Loading ratings data...")
+        with open(ratings_input_path.path, 'r') as f_ratings:
+            cur.copy_expert("COPY ratings FROM STDIN WITH (FORMAT CSV, HEADER)", f_ratings)
 
         conn.commit()
         print("Data loaded successfully!")
 
     except Exception as e:
         print(f"An error occurred: {e}")
-        conn.rollback()
+        if conn:
+            conn.rollback()
 
     finally:
         if cur:

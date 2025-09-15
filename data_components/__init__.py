@@ -1,2 +1,2 @@
-from .dataset_preparation import download_ml25m_data, unzip_data, csv_to_parquet, split_dataset, put_to_minio, qa_data
+from .dataset_preparation import download_ml25m_data, unzip_data, csv_to_parquet, split_dataset, put_to_minio, qa_data, load_to_postgres
 from .dataset_preparation_cuda import download_ml25m_data_cuda, unzip_data_cuda, csv_to_parquet_cuda, split_dataset_cuda, put_to_minio_cuda, qa_data_cuda
