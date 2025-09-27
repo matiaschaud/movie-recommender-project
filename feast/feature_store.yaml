@@ -2,15 +2,11 @@ project: movie_recommender
 registry:
   path: s3://feast-artifact-store/movie_recommender/registry.db
   type: s3
-provider: local
+provider: gcp
 online_store:
   type: redis
-  connection_string: "redis-master.feast.svc.cluster.local:6379,password=eqDj6bnygO"
+  connection_string: "redis-master.feast.svc.cluster.local:6379,password=OJ9IbsOTgD"
 offline_store:
-  type: postgres
-  host: postgres-postgresql.feast.svc.cluster.local
-  port: 5432
-  database: postgres
-  user: postgres
-  password: 8DnEQCrLf7
+  type: bigquery
+  dataset: feast_staging
 entity_key_serialization_version: 3

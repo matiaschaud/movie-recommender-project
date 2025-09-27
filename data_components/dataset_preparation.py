@@ -119,6 +119,7 @@ def load_to_postgres(
     db_user: str,
     db_password: str,
     db_port: int = 5432,
+    
 ):
     import psycopg2
     from datetime import datetime, timezone
@@ -187,3 +188,121 @@ def load_to_postgres(
             cur.close()
         if conn:
             conn.close()
+
+from kfp.dsl import component, Input, Artifact
+
+from kfp.dsl import component, Input, Artifact
+
+# We need the base image to have both pandas and the BQ library installed.
+@component(
+    base_image="python:3.11", 
+    packages_to_install=["google-cloud-bigquery", "pandas"] 
+)
+def load_to_bigquery(
+    ratings_input_path: Input[Artifact],
+    movies_input_path: Input[Artifact],
+    project_id: str,
+    dataset_id: str,
+    # New argument to receive the service account JSON key as a string
+    service_account_json: str, 
+    ratings_table_name: str = "ratings",
+    movies_table_name: str = "movies",
+):
+    import os
+    import tempfile
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    
+    print("--- Configuring GCP Credentials ---")
+    
+    # 1. Create a temporary file to store the credentials
+    # The 'delete=False' is important to keep the file until the component finishes
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as temp_key_file:
+        temp_key_file.write(service_account_json)
+        credentials_path = temp_key_file.name
+
+    print(f"Service Account key saved to temporary path: {credentials_path}")
+
+    # 2. Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+    # This enables Application Default Credentials (ADC) to automatically find the key.
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
+
+    # Alternative Method (Explicit Credentials):
+    # credentials_info = json.loads(service_account_json)
+    # credentials = service_account.Credentials.from_service_account_info(credentials_info)
+    # client = bigquery.Client(project=project_id, credentials=credentials)
+    
+    # 3. Initialize the BigQuery client (ADC will automatically use the environment variable)
+    try:
+        client = bigquery.Client(project=project_id)
+    except Exception as e:
+        # Crucial for debugging: If authentication fails, this prints the error
+        print("ERROR: Failed to initialize BigQuery client using provided credentials.")
+        print("Please check the JSON key and IAM permissions.")
+        raise e
+        
+    print(f"BigQuery Client authenticated and ready.")
+    
+    # Clean up the temporary file (optional, as the container is destroyed after the component runs)
+    # os.remove(credentials_path)
+    
+    # ----------------------------------------------------------------------
+    # START BIGQUERY LOAD LOGIC
+    # ----------------------------------------------------------------------
+
+    ratings_table_ref = f"{project_id}.{dataset_id}.{ratings_table_name}"
+    movies_table_ref = f"{project_id}.{dataset_id}.{movies_table_name}"
+    
+    print(f"Targeting BigQuery Project: {project_id}, Dataset: {dataset_id}")
+
+    # 1. MOVIES TABLE LOAD (Simplified snippet for brevity)
+    print(f"Starting load for movies data to table: {movies_table_ref}")
+    
+    movies_schema = [
+        bigquery.SchemaField("movieId", "INT64"),
+        bigquery.SchemaField("title", "STRING"),
+        bigquery.SchemaField("genres", "STRING"),
+    ]
+    
+    movies_job_config = bigquery.LoadJobConfig(
+        schema=movies_schema,
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    )
+    
+    with open(movies_input_path.path, "rb") as source_file:
+        movies_job = client.load_table_from_file(
+            source_file,
+            movies_table_ref,
+            job_config=movies_job_config,
+        ) 
+    movies_job.result() 
+    print(f"Movies data loaded successfully to {movies_table_ref}. Rows: {movies_job.output_rows}")
+    
+    # 2. RATINGS TABLE LOAD (Simplified snippet for brevity)
+    print(f"Starting load for ratings data to table: {ratings_table_ref}")
+
+    ratings_schema = [
+        bigquery.SchemaField("userId", "INT64"),
+        bigquery.SchemaField("movieId", "INT64"),
+        bigquery.SchemaField("rating", "FLOAT64"),
+        bigquery.SchemaField("timestamp", "INT64"),
+    ]
+    
+    ratings_job_config = bigquery.LoadJobConfig(
+        schema=ratings_schema,
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    )
+
+    with open(ratings_input_path.path, "rb") as source_file:
+        ratings_job = client.load_table_from_file(
+            source_file,
+            ratings_table_ref,
+            job_config=ratings_job_config,
+        ) 
+
+    ratings_job.result() 
+    print(f"Ratings data loaded successfully to {ratings_table_ref}. Rows: {ratings_job.output_rows}")

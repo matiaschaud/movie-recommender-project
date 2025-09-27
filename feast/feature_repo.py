@@ -1,9 +1,8 @@
 # This file is a skeleton for a feature repository.
 
 from feast import FeatureView, Field, Entity, ValueType, Project, FeatureService
-from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source import (
-    PostgreSQLSource,
-)
+# IMPORT CHANGE 1: Replace PostgreSQLSource import with BigQuerySource
+from feast.infra.offline_stores.bigquery import BigQuerySource
 from feast.types import Int64, Float64, String
 from datetime import timedelta
 
@@ -16,26 +15,50 @@ project = Project(name="movie_recommender", description="Repo for the Movie reco
 user_id = Entity(name="userid", description="User ID", value_type=ValueType.INT64)
 movie_id = Entity(name="movieid", description="Movie ID", value_type=ValueType.INT64)
 
-# Create a data source for your ratings data in PostgreSQL.
+# Create a data source for your ratings data in BigQuery.
 # This source defines where Feast will find the raw data.
-ratings_source = PostgreSQLSource(
+# CLASS CHANGE 1: Use BigQuerySource instead of PostgreSQLSource
+ratings_source = BigQuerySource(
     # The name of the data source.
     name="ratings_source",
     # The SQL query that extracts the ratings data from your database.
-    # Note: Feast automatically handles the `WHERE` clause for point-in-time correctness.
-    query="SELECT userid, movieid, rating, to_timestamp(timestamp) as event_timestamp FROM ratings",
+    # We use BigQuery's built-in functions for timestamp conversion.
+    # NOTE: You must use the fully qualified table name (e.g., 'project.dataset.table')
+    # or ensure your BQ dataset is configured in the feature_store.yaml.
+    query="""
+        SELECT 
+            CAST(userid AS INT64) AS userid,
+            CAST(movieid AS INT64) AS movieid, 
+            CAST(rating AS FLOAT64) AS rating, 
+            # Use BigQuery's TIMESTAMP_SECONDS or TIMESTAMP_MILLIS conversion 
+            # assuming your 'timestamp' column is an epoch integer.
+            TIMESTAMP_SECONDS(timestamp) as event_timestamp 
+        FROM 
+            # REPLACE_THIS_WITH_YOUR_RATINGS_TABLE
+            `tesis-master-ciencia-de-datos.feast_staging.ratings`
+    """,
     # The column that contains the timestamp for each event.
-    # This is crucial for point-in-time feature retrieval.
     timestamp_field="event_timestamp",
 )
 
 # Create a data source for your movies data.
-movies_source = PostgreSQLSource(
+# CLASS CHANGE 2: Use BigQuerySource instead of PostgreSQLSource
+movies_source = BigQuerySource(
     # The name of the data source.
     name="movies_source",
     # This query now reuses the created_at column and aliasing it to event_timestamp
     # so that both feature sources use the same timestamp column name
-    query="SELECT movieid, title, genres, '2000-01-01 00:00:00'::timestamp as event_timestamp FROM movies",
+    # We use a hardcoded TIMESTAMP literal for BigQuery.
+    query="""
+        SELECT 
+            CAST(movieid AS INT64) AS movieid, 
+            title, 
+            genres, 
+            CAST('2000-01-01 00:00:00' AS TIMESTAMP) as event_timestamp 
+        FROM 
+            # REPLACE_THIS_WITH_YOUR_MOVIES_TABLE
+            `tesis-master-ciencia-de-datos.feast_staging.movies`
+    """,
     timestamp_field="event_timestamp",
 )
 
