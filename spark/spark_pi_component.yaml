@@ -1,0 +1,133 @@
+# spark_pi_component.yaml
+name: spark-pi-job
+description: Runs the Spark Pi example using the SparkApplication CRD.
+inputs:
+- {name: application_name, type: String, default: 'spark-pi-job-kfp', description: 'Name for the SparkApplication resource.'}
+- {name: namespace, type: String, default: 'enterprise-gateway', description: 'Namespace where the SparkApplication should be created.'}
+implementation:
+  container:
+    # Use an image that contains kubectl. A common choice is dind or a custom image.
+    # For a minimal component, you might use a lightweight image and install kubectl/curl/jq on the fly, 
+    # but a dedicated MLOps tools image is usually more robust. 
+    # For this example, we assume an image with kubectl and a shell.
+    image: 'bitnami/kubectl:latest' 
+    command: ['sh', '-c']
+    args:
+      - |
+        # 1. Define the SparkApplication YAML as a multi-line string
+        SPARK_APP_YAML="apiVersion: sparkoperator.k8s.io/v1beta2
+        kind: SparkApplication
+        metadata:
+          name: \"$0\" # application_name
+          namespace: \"$1\" # namespace
+        spec:
+          type: Scala
+          mode: cluster
+          image: docker.io/library/spark:4.0.0
+          imagePullPolicy: IfNotPresent
+          mainClass: org.apache.spark.examples.SparkPi
+          mainApplicationFile: local:///opt/spark/examples/jars/spark-examples.jar
+          arguments:
+            - \"5000\"
+          sparkVersion: 4.0.0
+          sparkConf:
+            \"spark.kubernetes.driver.pod.annotations.sidecar.istio.io/inject\": \"false\"
+            \"spark.kubernetes.executor.pod.annotations.sidecar.istio.io/inject\": \"false\"
+          driver:
+            labels:
+              version: 4.0.0
+            cores: 1
+            memory: 512m
+            serviceAccount: spark-job-sa
+            securityContext:
+              capabilities:
+                drop:
+                  - ALL
+              runAsGroup: 185
+              runAsUser: 185
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              seccompProfile:
+                type: RuntimeDefault
+          executor:
+            labels:
+              version: 4.0.0
+            instances: 1
+            cores: 1
+            memory: 512m
+            serviceAccount: spark-job-sa
+            securityContext:
+              capabilities:
+                drop:
+                  - ALL
+              runAsGroup: 185
+              runAsUser: 185
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              seccompProfile:
+                type: RuntimeDefault"
+        
+        echo "Applying SparkApplication..."
+        echo "$SPARK_APP_YAML" | kubectl apply -f -
+        
+        # 2. Wait for the SparkApplication to complete
+        echo "Waiting for SparkApplication $0 in namespace $1 to complete..."
+        
+        # Poll the status of the SparkApplication every 10 seconds
+        TIMEOUT=3600 # 1 hour timeout
+        start_time=$(date +%s)
+        
+        while true; do
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            if [ $elapsed -ge $TIMEOUT ]; then
+                echo "Error: Timeout reached ($TIMEOUT seconds) while waiting for SparkApplication."
+                exit 1
+            fi
+
+            # Get the application state using jsonpath
+            # (Ensure line 82 is where STATE is set)
+            STATE=$(kubectl get sparkapplication $0 -n $1 -o jsonpath='{.status.applicationState.state}' 2>/dev/null)
+            
+            if [ $? -ne 0 ]; then
+                echo "Error: SparkApplication $0 not found or kubectl failed."
+                exit 1
+            fi
+            
+            echo "Current state: $STATE"
+            
+            # Check for successful completion (Using POSIX-compliant = for string comparison)
+            if [ "$STATE" = "COMPLETED" ]; then
+                echo "SparkApplication completed successfully."
+                break
+            fi
+            
+            # Check for failure (Using separate if checks for the logical OR)
+            if [ "$STATE" = "FAILED" ] || [ "$STATE" = "UNKNOWN" ]; then
+                # Note: If the shell doesn't support '||' in an 'if' line, use nested/separate blocks.
+                # The safest way is to check the negative conditions first, but let's try this simple OR first.
+                
+                # *****************************************************************
+                # The MOST portable check for FAILED/UNKNOWN using basic shell:
+                # *****************************************************************
+                if [ "$STATE" = "FAILED" ]; then
+                    SHOULD_EXIT=true
+                elif [ "$STATE" = "UNKNOWN" ]; then
+                    SHOULD_EXIT=true
+                else
+                    SHOULD_EXIT=false
+                fi
+            
+                if [ "$SHOULD_EXIT" = "true" ]; then
+                    echo "Error: SparkApplication failed or entered unknown state."
+                    kubectl describe sparkapplication $0 -n $1 
+                    exit 1
+                fi
+                # *****************************************************************
+            
+            fi
+            
+            sleep 10
+        done
+      - {inputValue: application_name}
+      - {inputValue: namespace}
